@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset='utf-8'>
+    <style>
+        body { margin: 0; }
+        canvas { display: block; }
+        #fileInput { position: absolute; top: 10px; left: 10px; z-index: 10; }
+        #backgroundInput { position: absolute; top: 10px; right: 10px; z-index: 10; }
+        #message { position: absolute; top: 40px; left: 10px; background-color: rgba(255, 255, 255, 0.7); padding: 10px; border-radius: 5px; display: none; }
+    </style>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/three.js/110/three.min.js'></script>
+    <script src='https://unpkg.com/three@0.110.0/examples/js/controls/OrbitControls.js'></script>
+    <script src='https://unpkg.com/three@0.110.0/examples/js/loaders/GLTFLoader.js'></script>
+    <script src='https://unpkg.com/three@0.110.0/examples/js/loaders/OBJLoader.js'></script>
+    <script src='https://unpkg.com/three@0.110.0/examples/js/loaders/STLLoader.js'></script>
+</head>
+<body>
+    <input type='file' id='fileInput' accept='.glb,.gltf,.obj,.stl'>
+    <input type='file' id='backgroundInput' accept='image/*'>
+    <div id='message'></div>
+    <script>
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xaaaaaa);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 5;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = false;
+        controls.screenSpacePanning = true;
+        controls.minDistance = 0.1;
+        controls.maxDistance = 50;
+
+        const ambientLight = new THREE.AmbientLight(0x404040);
+        scene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+        directionalLight.position.set(0, 1, 1).normalize();
+        scene.add(directionalLight);
+
+        const gltfLoader = new THREE.GLTFLoader();
+        const objLoader = new THREE.OBJLoader();
+        const stlLoader = new THREE.STLLoader();
+
+        const fileInput = document.getElementById('fileInput');
+        const backgroundInput = document.getElementById('backgroundInput');
+        const messageDiv = document.getElementById('message');
+
+        let loadedObject = null;
+
+        fileInput.addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                const fileExtension = file.name.split('.').pop().toLowerCase();
+                const supportedFormats = ['.glb', '.gltf', '.obj', '.stl'];
+
+                if (!supportedFormats.includes('.' + fileExtension)) {
+                    const supportedFormatsString = supportedFormats.join(', ');
+                    const errorMessage = `Файл не підтримується. Будь ласка, завантажте файли у форматах: ${supportedFormatsString}.`;
+                    console.error('Помилка: Непідтримуваний формат файлу', file);
+                    showMessage(errorMessage);
+                    return;
+                }
+
+                reader.onload = function(e) {
+                    console.log('Початок завантаження:', file.name);
+
+                    scene.children.forEach(child => {
+                        if (child !== camera && child !== ambientLight && child !== directionalLight) {
+                            console.log('Видаляю зі сцени:', child.name || child.id);
+                            scene.remove(child);
+                            if (child.geometry) child.geometry.dispose();
+                            if (child.material) {
+                                if (Array.isArray(child.material)) {
+                                    child.material.forEach(m => m.dispose());
+                                } else {
+                                    child.material.dispose();
+                                }
+                            }
+                        }
+                    });
+                    loadedObject = null; // Скидаємо завантажений об'єкт
+
+                    switch (fileExtension) {
+                        case 'glb':
+                        case 'gltf':
+                            gltfLoader.parse(e.target.result, '', function (gltf) {
+                                loadedObject = gltf.scene;
+                                scene.add(loadedObject);
+                                centerAndFitCamera(loadedObject);
+                                console.log('GLTF/GLB модель успішно завантажена:', loadedObject);
+                            }, function (error) {
+                                console.error('Помилка завантаження GLTF/GLB', error);
+                                showMessage('Помилка завантаження 3D-моделі.');
+                            });
+                            break;
+                        case 'obj':
+                            try {
+                                objLoader.parse(e.target.result, function (object) {
+                                    loadedObject = object;
+                                    scene.add(loadedObject);
+                                    centerAndFitCamera(loadedObject);
+                                    console.log('OBJ модель успішно завантажена:', loadedObject);
+                                }, function (error) {
+                                    console.error('Помилка парсингу OBJ', error);
+                                    showMessage('Помилка обробки OBJ файлу.');
+                                });
+                            } catch (error) {
+                                console.error('Помилка парсингу OBJ (try-catch)', error);
+                                showMessage('Помилка обробки OBJ файлу.');
+                            }
+                            break;
+                        case 'stl':
+                            try {
+                                const geometry = stlLoader.parse(e.target.result);
+                                const material = new THREE.MeshPhongMaterial({ color: 0xffffff });
+                                const mesh = new THREE.Mesh(geometry, material);
+                                loadedObject = mesh;
+                                scene.add(loadedObject);
+                                centerAndFitCamera(loadedObject);
+                                console.log('STL модель успішно завантажена:', loadedObject);
+                            } catch (error) {
+                                console.error('Помилка парсингу STL', error);
+                                showMessage('Помилка обробки STL файлу.');
+                            }
+                            break;
+                    }
+                };
+
+                reader.onerror = function(error) {
+                    console.error('Помилка читання файлу', error);
+                    showMessage('Помилка читання файлу.');
+                };
+
+                if (fileExtension === 'glb' || fileExtension === 'gltf') {
+                    reader.readAsArrayBuffer(file);
+                } else {
+                    reader.readAsText(file);
+                }
+            }
+        });
+
+        backgroundInput.addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const texture = new THREE.TextureLoader().load(e.target.result);
+                    scene.background = texture;
+                };
+                reader.readAsDataURL(file);
+            } else {
+                scene.background = new THREE.Color(0xaaaaaa);
+            }
+        });
+
+        function centerAndFitCamera(object) {
+            const boundingBox = new THREE.Box3().setFromObject(object);
+            const center = boundingBox.getCenter(new THREE.Vector3());
+            const size = boundingBox.getSize(new THREE.Vector3());
+
+            controls.target.copy(center);
+
+            const maxDimension = Math.max(size.x, size.y, size.z);
+            const cameraDistance = maxDimension * 1.5;
+
+            camera.position.copy(center).add(new THREE.Vector3(0, 0, cameraDistance));
+            camera.lookAt(center);
+
+            controls.update();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
